@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Client-Side File Converter: Image ↔ PDF</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- Load jsPDF library (for Image to PDF conversion) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- Load PDF.js (Core Library for PDF rendering) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.js"></script>
+    <!-- Load JSZip for bundling extracted images into a ZIP file -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+    <script>
+        // Initialize jspdf from the loaded module
+        const { jsPDF } = window.jspdf;
+        // Set worker source for pdf.js to ensure proper functionality in browser environments
+        if (window.pdfjsLib) {
+             window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.js';
+        }
+
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        'primary': '#4f46e5', /* Indigo 600 */
+                        'primary-dark': '#4338ca', /* Indigo 700 */
+                        'accent': '#10b981', /* Emerald 500 */
+                        'background': '#f9fafb', /* Gray 50 */
+                        'card': '#ffffff',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f9fafb;
+            min-height: 100vh;
+        }
+        .file-input-area {
+            border: 3px dashed #d1d5db;
+            transition: all 0.3s ease;
+        }
+        .file-input-area.drag-over {
+            border-color: #4f46e5;
+            background-color: #e0e7ff;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8 flex flex-col items-center">
+
+    <div class="w-full max-w-3xl bg-card p-8 rounded-xl shadow-2xl border border-gray-200">
+        <header class="text-center mb-8 border-b pb-4">
+            <h1 class="text-4xl font-extrabold text-gray-900 mb-2">Universal File Converter</h1>
+            <p class="text-gray-600 text-lg">Image ↔ PDF Conversion (Client-Side, Private)</p>
+        </header>
+
+        <!-- Step 1: Conversion Type -->
+        <div class="mb-8 p-6 bg-gray-50 rounded-xl border border-gray-200">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">1. Choose Conversion Goal</h2>
+            <label for="conversion-type" class="block text-sm font-medium text-gray-700 mb-1">Conversion Direction:</label>
+            <select id="conversion-type" onchange="resetConversion()" class="w-full p-3 border border-gray-300 rounded-lg bg-white shadow-sm text-gray-800 focus:ring-primary focus:border-primary">
+                <option value="image-to-pdf">Image (JPG/PNG) → Single PDF</option>
+                <option value="pdf-to-images">PDF → Multiple Image Pages (JPG)</option>
+            </select>
+        </div>
+
+
+        <!-- Step 2: File Selection -->
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">2. Select Files</h2>
+            <div id="file-input-area" class="file-input-area p-10 rounded-xl text-center cursor-pointer hover:bg-gray-50 transition duration-150" onclick="document.getElementById('file-input').click();">
+                <svg class="mx-auto h-12 w-12 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3 3m0 0l-3-3m3 3V8" />
+                </svg>
+                <p id="input-help-text" class="mt-1 text-sm text-gray-600">Click to select files...</p>
+                <p class="text-xs text-gray-500">Files are processed client-side (locally).</p>
+                <!-- NOTE: accept attribute and multiple property updated by JS -->
+                <input type="file" id="file-input" multiple class="hidden" onchange="handleFileSelect(event)">
+            </div>
+            
+            <div id="file-list-container" class="mt-4 hidden">
+                <h3 class="text-lg font-medium text-gray-700 mb-2">Selected Files:</h3>
+                <ul id="file-list" class="space-y-2 max-h-40 overflow-y-auto p-2 bg-gray-100 rounded-lg border">
+                    <!-- File names will be displayed here -->
+                </ul>
+            </div>
+        </div>
+
+        <!-- Step 3: Action and Progress -->
+        <div class="mb-8 p-6 bg-gray-50 rounded-xl border border-gray-200">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">3. Convert & Download</h2>
+            
+            <!-- Progress Bar -->
+            <div id="progress-container" class="mb-4 hidden">
+                <div class="flex justify-between mb-1">
+                    <span class="text-base font-medium text-primary-dark" id="progress-status">Initializing...</span>
+                    <span class="text-sm font-medium text-primary-dark" id="progress-percentage">0%</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div id="progress-bar" class="bg-primary h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <button id="convert-button" onclick="startConversion()" class="w-full py-3 bg-primary text-white font-bold rounded-lg hover:bg-primary-dark transition duration-150 shadow-lg text-lg disabled:opacity-50" disabled>
+                <span id="button-text">Start Conversion</span>
+                <svg id="loading-spinner" class="hidden animate-spin h-6 w-6 mx-auto text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Step 4: Result -->
+        <div>
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">4. Results</h2>
+            <div id="result-panel" class="p-6 border border-dashed border-gray-300 rounded-xl bg-white text-center min-h-[100px] flex items-center justify-center">
+                <p id="result-message" class="text-gray-500">A download link will appear here after conversion.</p>
+            </div>
+        </div>
+        
+    </div>
+
+    <script>
+        let selectedFiles = [];
+        let conversionGoal = 'image-to-pdf';
+
+        const fileInputArea = document.getElementById('file-input-area');
+        const fileInput = document.getElementById('file-input');
+        const conversionTypeSelect = document.getElementById('conversion-type');
+        const fileList = document.getElementById('file-list');
+        const fileListContainer = document.getElementById('file-list-container');
+        const convertButton = document.getElementById('convert-button');
+        const resultPanel = document.getElementById('result-panel');
+        const resultMessage = document.getElementById('result-message');
+        const buttonText = document.getElementById('button-text');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const inputHelpText = document.getElementById('input-help-text');
+        
+        // Progress Bar elements
+        const progressBarContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const progressStatus = document.getElementById('progress-status');
+        const progressPercentage = document.getElementById('progress-percentage');
+        
+
+        // --- UI State Management ---
+
+        /**
+         * Updates the progress bar visually and textually.
+         */
+        function updateProgress(status, percent) {
+            progressBarContainer.classList.remove('hidden');
+            progressStatus.textContent = status;
+            progressPercentage.textContent = `${Math.round(percent)}%`;
+            progressBar.style.width = `${percent}%`;
+        }
+        
+        /**
+         * Clears progress display.
+         */
+        function clearProgress() {
+            progressBarContainer.classList.add('hidden');
+            progressBar.style.width = '0%';
+        }
+
+        /**
+         * Updates the state of the conversion button.
+         */
+        function setButtonState(isLoading = false, message = 'Start Conversion') {
+            convertButton.disabled = isLoading || selectedFiles.length === 0;
+            if (isLoading) {
+                buttonText.textContent = '';
+                loadingSpinner.classList.remove('hidden');
+            } else {
+                buttonText.textContent = message;
+                loadingSpinner.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Displays a temporary user message in the result panel.
+         */
+        function displayResult(message, isDownload = false, downloadUrl = null) {
+            resultPanel.innerHTML = ''; // Clear existing content
+            
+            if (isDownload) {
+                const downloadLink = document.createElement('a');
+                downloadLink.href = downloadUrl;
+                downloadLink.download = message;
+                downloadLink.className = 'py-3 px-6 bg-accent text-white font-bold rounded-lg hover:bg-green-600 transition shadow-lg text-lg';
+                downloadLink.textContent = `⬇️ Download ${message}`;
+                resultPanel.appendChild(downloadLink);
+                resultPanel.classList.add('border-accent', 'bg-green-50');
+            } else {
+                const p = document.createElement('p');
+                p.className = message.includes('Error') ? 'text-red-500 font-medium' : 'text-gray-700 font-medium';
+                p.textContent = message;
+                resultPanel.appendChild(p);
+                resultPanel.classList.remove('border-accent', 'bg-green-50');
+            }
+        }
+        
+        // --- File Handling and Reset ---
+
+        /**
+         * Resets the file input area when the conversion type changes.
+         */
+        window.resetConversion = function() {
+            conversionGoal = conversionTypeSelect.value;
+            selectedFiles = [];
+            renderFileList();
+            clearProgress();
+            
+            if (conversionGoal === 'image-to-pdf') {
+                fileInput.accept = 'image/png, image/jpeg';
+                fileInput.multiple = true;
+                inputHelpText.textContent = 'Select multiple JPG or PNG files.';
+            } else if (conversionGoal === 'pdf-to-images') {
+                fileInput.accept = 'application/pdf';
+                fileInput.multiple = false; // Only allow one PDF at a time
+                inputHelpText.textContent = 'Select a single PDF file.';
+            }
+            setButtonState(false, 'Start Conversion');
+        };
+
+
+        /**
+         * Renders the list of files selected by the user.
+         */
+        function renderFileList() {
+            fileList.innerHTML = '';
+            if (selectedFiles.length === 0) {
+                fileListContainer.classList.add('hidden');
+                displayResult("A download link will appear here after conversion.");
+                return;
+            }
+
+            fileListContainer.classList.remove('hidden');
+            selectedFiles.forEach((file, index) => {
+                const li = document.createElement('li');
+                li.className = 'flex justify-between items-center bg-white p-2 rounded-md shadow-sm';
+                li.innerHTML = `
+                    <span class="text-gray-800 truncate">${index + 1}. ${file.name}</span>
+                    <button class="text-red-500 hover:text-red-700 text-sm ml-2" onclick="removeFile(${index})">Remove</button>
+                `;
+                fileList.appendChild(li);
+            });
+            
+            const actionText = (conversionGoal === 'image-to-pdf') 
+                ? `Convert ${selectedFiles.length} Images to PDF`
+                : `Extract Pages from ${selectedFiles[0].name}`;
+                
+            setButtonState(false, actionText);
+            displayResult(`Ready to process ${selectedFiles.length} file(s).`);
+        }
+
+        /**
+         * Event handler for file input selection.
+         */
+        window.handleFileSelect = function(event) {
+            const files = event.target.files;
+            if (files.length > 0) {
+                const isImageGoal = conversionGoal === 'image-to-pdf';
+                const isPdfGoal = conversionGoal === 'pdf-to-images';
+                
+                const validFiles = Array.from(files).filter(file => {
+                    if (isImageGoal) return file.type.startsWith('image/');
+                    if (isPdfGoal) return file.type === 'application/pdf';
+                    return false;
+                });
+                
+                if (validFiles.length > 0) {
+                    // If converting PDF to image, only allow one file
+                    selectedFiles = isPdfGoal ? [validFiles[0]] : [...selectedFiles, ...validFiles];
+                } else if (files.length > 0) {
+                    displayResult("Error: Invalid file type selected for the current goal.", false);
+                }
+                renderFileList();
+            }
+        };
+
+        /**
+         * Removes a file from the selectedFiles array.
+         */
+        window.removeFile = function(indexToRemove) {
+            selectedFiles.splice(indexToRemove, 1);
+            renderFileList();
+        };
+
+        // --- Conversion Dispatcher ---
+
+        /**
+         * Starts the selected conversion process.
+         */
+        window.startConversion = function() {
+            if (selectedFiles.length === 0) {
+                displayResult("Error: Please select file(s).", false);
+                return;
+            }
+            
+            if (conversionGoal === 'image-to-pdf') {
+                convertImagesToPDF(selectedFiles);
+            } else if (conversionGoal === 'pdf-to-images') {
+                 // The handler only allows one PDF file
+                convertPDFToImages(selectedFiles[0]);
+            } else {
+                 displayResult("Error: Unsupported conversion type selected.", false);
+            }
+        };
+
+        // --- Image to PDF Logic (Existing) ---
+
+        /**
+         * Converts selected images into a single PDF document.
+         */
+        async function convertImagesToPDF(files) {
+            setButtonState(true, 'Processing...');
+            clearProgress();
+            
+            try {
+                const doc = new jsPDF('p', 'mm', 'a4'); 
+                const A4_WIDTH = 210; 
+                const A4_HEIGHT = 297;
+                let isFirstPage = true;
+                
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    updateProgress(`Processing Image ${i + 1}/${files.length}`, ((i + 1) / files.length) * 100);
+
+                    const imageDataUrl = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => resolve(e.target.result);
+                        reader.onerror = (e) => reject(new Error("Failed to read file."));
+                        reader.readAsDataURL(file);
+                    });
+
+                    const img = await new Promise((resolve) => {
+                        const i = new Image();
+                        i.onload = () => resolve(i);
+                        i.src = imageDataUrl;
+                    });
+                    
+                    const imgWidth = img.width;
+                    const imgHeight = img.height;
+                    const imgType = file.type.split('/')[1].toUpperCase();
+
+                    let ratio = imgWidth / imgHeight;
+                    let pdfWidth, pdfHeight;
+                    
+                    pdfWidth = A4_WIDTH;
+                    pdfHeight = A4_WIDTH / ratio;
+
+                    if (pdfHeight > A4_HEIGHT) {
+                        pdfHeight = A4_HEIGHT;
+                        pdfWidth = A4_HEIGHT * ratio;
+                    }
+
+                    const x = (A4_WIDTH - pdfWidth) / 2;
+                    const y = (A4_HEIGHT - pdfHeight) / 2;
+
+                    if (!isFirstPage) doc.addPage();
+                    else isFirstPage = false;
+                    
+                    doc.addImage(imageDataUrl, imgType, x, y, pdfWidth, pdfHeight, null, 'FAST');
+                }
+
+                updateProgress('Finalizing PDF...', 100);
+                const filename = `converted_images_${Date.now()}.pdf`;
+                doc.save(filename);
+                
+                displayResult(filename, true, doc.output('bloburl'));
+                
+            } catch (error) {
+                console.error("Conversion failed:", error);
+                displayResult(`Error: Image to PDF failed. Details: ${error.message}`, false);
+            } finally {
+                setButtonState(false, 'Start Conversion');
+                selectedFiles = [];
+                renderFileList();
+                clearProgress();
+            }
+        }
+        
+        // --- PDF to Image Logic (NEW) ---
+
+        /**
+         * Converts a single PDF file into multiple JPG image files (one per page).
+         */
+        async function convertPDFToImages(file) {
+            setButtonState(true, 'Processing...');
+            clearProgress();
+            
+            try {
+                // 1. Read PDF as Array Buffer
+                displayResult(`Reading PDF: ${file.name}...`, false);
+                const arrayBuffer = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = (e) => reject(new Error("Failed to read PDF file."));
+                    reader.readAsArrayBuffer(file);
+                });
+
+                // 2. Load PDF document
+                // Check if pdfjsLib is available before using it
+                if (typeof window.pdfjsLib === 'undefined') {
+                    throw new Error("PDF rendering library (pdf.js) not loaded.");
+                }
+                
+                const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                const numPages = pdf.numPages;
+                
+                // Check if JSZip is available
+                if (typeof window.JSZip === 'undefined') {
+                    throw new Error("Zipping library (JSZip) not loaded.");
+                }
+                const zip = new window.JSZip(); // Create a zip container for multiple images
+                
+                for (let i = 1; i <= numPages; i++) {
+                    updateProgress(`Rendering Page ${i} of ${numPages}`, (i / numPages) * 100);
+
+                    // 3. Get page and viewport
+                    const page = await pdf.getPage(i);
+                    const viewport = page.getViewport({ scale: 2.0 }); // Use scale 2.0 for better resolution
+
+                    // 4. Render page to canvas
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.height = viewport.height;
+                    canvas.width = viewport.width;
+
+                    await page.render({
+                        canvasContext: context,
+                        viewport: viewport,
+                    }).promise;
+                    
+                    // 5. Convert canvas to JPG data URL
+                    const imageDataUrl = canvas.toDataURL('image/jpeg', 0.9); // 0.9 quality JPG
+                    const base64Data = imageDataUrl.replace(/^data:image\/jpeg;base64,/, "");
+
+                    // 6. Add image to zip file
+                    zip.file(`page_${i}.jpg`, base64Data, { base64: true });
+                }
+
+                // 7. Generate and Download Zip File
+                updateProgress('Zipping images...', 100);
+                const zipBlob = await zip.generateAsync({ type: "blob" });
+                
+                const zipFilename = `extracted_images_${Date.now()}.zip`;
+                
+                // Create a temporary URL for the blob and trigger download
+                const downloadUrl = URL.createObjectURL(zipBlob);
+                displayResult(zipFilename, true, downloadUrl);
+                
+            } catch (error) {
+                console.error("PDF to Image conversion failed:", error);
+                // Providing clear instruction for local execution issues
+                const userMessage = error.message.includes("Failed to read") 
+                    ? "Error: Could not read file. Ensure file isn't protected."
+                    : "Error: PDF processing failed. Please ensure you are running the page via a local web server (like VS Code's Live Server).";
+                    
+                displayResult(userMessage, false);
+            } finally {
+                setButtonState(false, 'Start Conversion');
+                selectedFiles = [];
+                renderFileList();
+                clearProgress();
+            }
+        }
+
+
+        // --- Drag and Drop Handlers ---
+
+        fileInputArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileInputArea.classList.add('drag-over');
+        });
+
+        fileInputArea.addEventListener('dragleave', () => {
+            fileInputArea.classList.remove('drag-over');
+        });
+
+        fileInputArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileInputArea.classList.remove('drag-over');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const isImageGoal = conversionGoal === 'image-to-pdf';
+                const isPdfGoal = conversionGoal === 'pdf-to-images';
+                
+                const validFiles = Array.from(files).filter(file => {
+                    if (isImageGoal) return file.type.startsWith('image/');
+                    if (isPdfGoal) return file.type === 'application/pdf';
+                    return false;
+                });
+                
+                if (validFiles.length > 0) {
+                    // Overwrite if PDF goal (single file)
+                    selectedFiles = isPdfGoal ? [validFiles[0]] : [...selectedFiles, ...validFiles];
+                }
+                renderFileList();
+            }
+        });
+        
+        // --- Initialization ---
+        window.onload = function() {
+            // Note: JSZip is loaded via script tag, so we just run the initialization logic.
+            // Check dependency existence for robust execution
+            if (typeof window.JSZip === 'undefined' || typeof window.pdfjsLib === 'undefined' || typeof window.jspdf === 'undefined') {
+                displayResult("Error: Essential libraries (jsPDF, PDF.js, JSZip) failed to load. Check your internet connection.", false);
+                setButtonState(true); // Disable all functionality if libraries are missing
+                return;
+            }
+            window.resetConversion();
+        };
+    </script>
+</body>
+</html>
